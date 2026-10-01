@@ -10,6 +10,9 @@ export async function POST(request: Request) {
 
   // 1. fetch the job
   const job = await Job.findById(jobId);
+  if (!job) {
+    return NextResponse.json({ error: "Job not found" }, { status: 404 });
+  }
 
   // 2. fetch all applicants for this job
   const applicants = await Applicant.find({ jobId });
@@ -71,6 +74,29 @@ INSTRUCTIONS:
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
+        // force a JSON array in the exact shape the shortlist page renders
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                rank: { type: "NUMBER" },
+                name: { type: "STRING" },
+                score: { type: "NUMBER" },
+                strengths: { type: "STRING" },
+                gaps: { type: "STRING" },
+                recommendation: { type: "STRING" },
+                matchLevel: {
+                  type: "STRING",
+                  enum: ["Strong Match", "Good Match", "Partial Match", "Poor Match"],
+                },
+              },
+              required: ["rank", "name", "score", "strengths", "gaps", "recommendation", "matchLevel"],
+            },
+          },
+        },
       }),
     },
   );
@@ -86,17 +112,17 @@ INSTRUCTIONS:
     );
   }
 
-  // 5. extract the text from Gemini response
-  const rawText = geminiData.candidates[0].content.parts[0].text;
+  // 5. parse the JSON from Gemini's response
+  let shortlist;
+  try {
+    shortlist = JSON.parse(geminiData.candidates?.[0]?.content?.parts?.[0]?.text ?? "");
+  } catch {
+    return NextResponse.json(
+      { error: "AI returned an unexpected format. Please try again." },
+      { status: 502 },
+    );
+  }
 
-  // 6. clean and parse the JSON
-  const cleaned = rawText
-    .replace(/```json/g, "")
-    .replace(/```/g, "")
-    .trim();
-
-  const shortlist = JSON.parse(cleaned);
-
-  // 7. return the ranked list
+  // 6. return the ranked list
   return NextResponse.json(shortlist);
 }

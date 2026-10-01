@@ -25,24 +25,31 @@ export async function POST(request: Request) {
               },
               {
                 text: `Extract the candidate information from this resume.
-Return ONLY a valid JSON object with no extra text, no markdown, no backticks.
-The object must have exactly these fields:
-- name (string)
-- skills (comma separated string of their technical skills)
-- experience (number of years as a number only)
-- education (their highest degree and field)
-
-Example:
-{
-  "name": "John Doe",
-  "skills": "React, TypeScript, Node.js",
-  "experience": 4,
-  "education": "BSc Computer Science"
-}`,
+Use an empty string for anything the resume does not mention.
+yearsOfExperience is the total years of professional experience as a number (0 if none).`,
               },
             ],
           },
         ],
+        // ask Gemini for JSON that matches the Applicant model instead of free text
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              name: { type: "STRING" },
+              email: { type: "STRING" },
+              location: { type: "STRING" },
+              title: { type: "STRING" },
+              skills: { type: "STRING", description: "comma separated technical skills" },
+              yearsOfExperience: { type: "NUMBER" },
+              degree: { type: "STRING" },
+              field: { type: "STRING" },
+              institution: { type: "STRING" },
+            },
+            required: ["name", "skills", "yearsOfExperience"],
+          },
+        },
       }),
     }
   );
@@ -56,13 +63,9 @@ Example:
     );
   }
 
-  // extract and clean the text
-  const rawText = geminiData.candidates[0].content.parts[0].text;
-  const cleaned = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
-
   let parsed;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = JSON.parse(geminiData.candidates?.[0]?.content?.parts?.[0]?.text ?? "");
   } catch {
     return NextResponse.json(
       { error: "AI returned unexpected format. Try again." },
@@ -70,13 +73,26 @@ Example:
     );
   }
 
-  // save to MongoDB
+  if (!parsed.name || !parsed.skills) {
+    return NextResponse.json(
+      { error: "Could not find a name and skills in this resume." },
+      { status: 422 }
+    );
+  }
+
+  // save to MongoDB — field names must match the Applicant schema
   const applicant = await Applicant.create({
     jobId,
     name: parsed.name,
+    email: parsed.email || "",
+    location: parsed.location || "",
+    title: parsed.title || "",
     skills: parsed.skills,
-    experience: parsed.experience,
-    education: parsed.education,
+    yearsOfExperience: Number(parsed.yearsOfExperience) || 0,
+    degree: parsed.degree || "",
+    field: parsed.field || "",
+    institution: parsed.institution || "",
+    source: "external",
   });
 
   return NextResponse.json(applicant, { status: 201 });
